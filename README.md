@@ -93,8 +93,11 @@ secrets before I push"* — or run a mode directly:
 Decide **how often** the check runs and **how strict** it is, then let the
 installer wire it into `settings.json` (it merges, preserving your other settings):
 
+Three independent choices: **cadence** (how often), **enforcement** (warn vs
+block), and **link-check** (auto-resolve redirects or not).
+
 ```bash
-# once per session: a near-instant change-nudge (no model tokens)
+# once per session: a near-instant change-nudge (no model tokens, no network)
 python3 security-audit/scripts/install_hooks.py --cadence session-start --enforcement warn
 
 # before EVERY skill/MCP call: warn on issues, never block
@@ -103,17 +106,25 @@ python3 security-audit/scripts/install_hooks.py --cadence per-call --enforcement
 # before EVERY skill/MCP call: DENY a call that carries a Critical finding
 python3 security-audit/scripts/install_hooks.py --cadence per-call --enforcement block
 
+# also follow due links at session start to auto-detect a hijacked redirect
+python3 security-audit/scripts/install_hooks.py --cadence session-start --link-check resolve
+
 # turn automatic checking off
 python3 security-audit/scripts/install_hooks.py --uninstall
 ```
 
-| Cadence | Mechanism | Cost | Catches |
-|---------|-----------|------|---------|
-| `session-start` | `SessionStart` hook | once/session, ~0 | changes & due links since last audit |
-| `per-call` | `PreToolUse` hook on `Skill` + `mcp__.*` | ~100–300 ms/call | the specific skill/MCP **before** it runs |
+| Choice | Mechanism | Cost | Catches |
+|--------|-----------|------|---------|
+| cadence `session-start` | `SessionStart` hook | once/session, ~0 | changes & due links since last audit |
+| cadence `per-call` | `PreToolUse` hook on `Skill` + `mcp__.*` | ~100–300 ms/call | the specific skill/MCP **before** it runs |
+| enforcement `warn` / `block` | (per-call) guard verdict | — | warns, or denies a call carrying a Critical |
+| link-check `resolve` | session-start `--resolve-urls` | network at startup | a previously-trusted link whose **destination changed** |
 
-The hook runs only the deterministic engine (no model, no network); the deep
-review and live URL verification happen when you run `/security-audit`. The
+**What a hook can and can't do:** a hook runs the deterministic engine only — it
+can resolve redirects and diff destinations (catches *that* a link changed), but
+it cannot run the model. Deciding *whether* a new or changed destination is
+actually hostile (a docs link that now serves a login/exploit page), and live
+**WebFetch** content judgement, happen when you run `/security-audit`. The
 per-call guard targets just the item being invoked and **fails open** on any
 error, so it can never wedge your session.
 

@@ -636,7 +636,15 @@ def main():
     if args.changed_only:
         n = s["new"] + s["changed"] + s["removed"]
         due = s.get("urls_due", 0)
-        if n:
+        link_changed = [f for f in result["findings"]
+                        if f.get("id") in ("URL_REDIRECT_CHANGED", "URL_CONTENT_CHANGED")]
+        if link_changed:
+            # The scariest case: a link you trusted now resolves/serves something
+            # different. Lead with it regardless of file changes.
+            print(f"⛔ security-audit: {len(link_changed)} previously-trusted link(s) "
+                  f"changed destination/content since last audit — possible takeover. "
+                  f"Run /security-audit now (do not follow the link).")
+        elif n:
             bits = []
             if s["new"]:
                 bits.append(f"{s['new']} new")

@@ -82,12 +82,24 @@ enable automatic auditing, or say something like "audit my skills automatically"
    - *block* — denies a skill/MCP call that carries a Critical finding until it's
      resolved. (It targets the specific item being called and fails open on any
      error, so it won't wedge the session.)
+3. **Live link checking** — "Should the session-start hook follow external links
+   over the network to auto-detect a hijacked/repointed destination?"
+   - *off* (default) — hooks stay network-free; links are only flagged as "due"
+     and actually verified when you run `/security-audit`.
+   - *resolve* — the session-start hook deterministically follows each due link's
+     redirects and alerts you if a previously-trusted destination changed. No
+     model/tokens, but it makes network calls at session start (amortized by the
+     7-day TTL after your first full audit). The **model-level WebFetch
+     judgement** — deciding whether a *new* or first-seen destination is actually
+     hostile, vs. just changed — only happens when you run `/security-audit`,
+     because a shell hook can't invoke the model.
 
 Then apply the choice with the installer (it merges into `settings.json`,
 preserving everything else):
 
 ```bash
-python3 scripts/install_hooks.py --cadence <session-start|per-call> --enforcement <warn|block>
+python3 scripts/install_hooks.py --cadence <session-start|per-call> \
+        --enforcement <warn|block> --link-check <off|resolve>
 python3 scripts/install_hooks.py --uninstall   # to turn automatic checking off
 ```
 

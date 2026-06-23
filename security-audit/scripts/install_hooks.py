@@ -62,11 +62,14 @@ def _strip_ours(hook_list):
     return [e for e in (hook_list or []) if not _is_ours(e)]
 
 
-def session_start_entry():
-    return {"hooks": [{
-        "type": "command",
-        "command": f'python3 "{SCRIPTS}/scan.py" scan --changed-only --quiet',
-    }]}
+def session_start_entry(resolve_links=False):
+    cmd = f'python3 "{SCRIPTS}/scan.py" scan --changed-only --quiet'
+    if resolve_links:
+        # Deterministically follow each due link's redirects at session start so a
+        # repointed/hijacked destination is caught automatically (no model, but it
+        # makes network calls). The nudge stays quiet unless something changed.
+        cmd += " --resolve-urls"
+    return {"hooks": [{"type": "command", "command": cmd}]}
 
 
 def pretooluse_entry(enforcement):
@@ -97,6 +100,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cadence", choices=["session-start", "per-call"], default="session-start")
     ap.add_argument("--enforcement", choices=["warn", "block"], default="warn")
+    ap.add_argument("--link-check", choices=["off", "resolve"], default="off",
+                    help="'resolve' makes the session-start hook follow due links "
+                         "over the network to auto-detect a changed/hijacked "
+                         "destination (deterministic, no model). Default off.")
     ap.add_argument("--uninstall", action="store_true")
     args = ap.parse_args()
 
@@ -111,12 +118,14 @@ def main():
     if args.uninstall:
         summary = "uninstalled (removed security-audit hooks)"
     else:
-        hooks["SessionStart"].append(session_start_entry())
+        resolve_links = args.link_check == "resolve"
+        hooks["SessionStart"].append(session_start_entry(resolve_links))
+        link_note = " + auto link-resolution" if resolve_links else ""
         if args.cadence == "per-call":
             hooks["PreToolUse"].append(pretooluse_entry(args.enforcement))
-            summary = f"per-call ({args.enforcement}) + session-start nudge"
+            summary = f"per-call ({args.enforcement}) + session-start nudge{link_note}"
         else:
-            summary = "session-start nudge only"
+            summary = f"session-start nudge only{link_note}"
 
     # Drop empty event lists; drop hooks key if fully empty.
     hooks = {k: v for k, v in hooks.items() if v}
