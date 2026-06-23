@@ -542,6 +542,48 @@ def run(mode, project, resolve, update, ttl_hours=168):
     return result
 
 
+def audit_target(tool_name, tool_input, project):
+    """Audit just the single skill/MCP a tool call is about to invoke. Used by the
+    PreToolUse guard so the per-call check is fast (one item, no full sweep) and
+    precise (it judges the thing actually being called, not unrelated standing
+    issues). Returns {key, status, counts, findings} or None if the tool isn't a
+    recognizable local skill/MCP (in which case the guard fails open)."""
+    state = st.load_state()
+    prev = state.get("items", {})
+    tool_input = tool_input or {}
+    found = None
+
+    if tool_name == "Skill":
+        name = tool_input.get("skill") or tool_input.get("name") or tool_input.get("command")
+        if isinstance(name, str):
+            name = name.lstrip("/").split()[0] if name.strip() else name
+            for sname, sdir in skill_dirs(project):
+                if sname == name:
+                    h, findings, _ = scan_skill_item(sname, sdir)
+                    found = (f"skill:{sname}", h, findings)
+                    break
+    elif tool_name.startswith("mcp__"):
+        parts = tool_name.split("__")
+        server = parts[1] if len(parts) > 1 else ""
+        for label, location, servers in mcp_sources(project):
+            for sname, cfg in servers.items():
+                if sname == server:
+                    h, findings, _ = scan_mcp_item(sname, cfg, location)
+                    found = (f"mcp:{label}:{sname}", h, findings)
+                    break
+            if found:
+                break
+
+    if not found:
+        return None
+    key, h, findings = found
+    cached_hash = prev.get(key, {}).get("hash")
+    status = ("new" if cached_hash is None
+              else "changed" if cached_hash != h else "unchanged")
+    return {"key": key, "status": status,
+            "counts": severity_counts(findings), "findings": findings}
+
+
 def _scope_label(mode, project):
     if mode == "deploy":
         return f"deploy gate: {project or os.getcwd()}"

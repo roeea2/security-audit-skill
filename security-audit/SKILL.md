@@ -64,6 +64,38 @@ re-audits are near-free until something actually changes.
 Run a mode explicitly with `/security-audit deploy`, etc. With no argument, use
 `scan`.
 
+## Setup & enforcement (ask the user — don't assume)
+
+Automatic checking can run at two cadences, and the per-call cadence can warn or
+block. These are the user's call, so when they first set up the skill, ask to
+enable automatic auditing, or say something like "audit my skills automatically",
+**ask them two short questions and then configure it** — do not pick silently.
+
+1. **Cadence** — "Run the check before *every* skill/MCP call, or just once at
+   session start?"
+   - *session-start* — a near-instant change-nudge once per session. Zero per-call
+     overhead.
+   - *per-call* — runs the guard before every skill/MCP invocation (a `PreToolUse`
+     hook). Truly "check whenever a skill/MCP runs," at ~100–300 ms per call.
+2. **Enforcement** (only if per-call) — "Warn, or block on Critical?"
+   - *warn* — surfaces a notice to me but never blocks the call.
+   - *block* — denies a skill/MCP call that carries a Critical finding until it's
+     resolved. (It targets the specific item being called and fails open on any
+     error, so it won't wedge the session.)
+
+Then apply the choice with the installer (it merges into `settings.json`,
+preserving everything else):
+
+```bash
+python3 scripts/install_hooks.py --cadence <session-start|per-call> --enforcement <warn|block>
+python3 scripts/install_hooks.py --uninstall   # to turn automatic checking off
+```
+
+Use `AskUserQuestion` for these two questions when you have it. Be honest about
+the trade-off: only the deterministic engine runs in a hook (no model, no
+network) — the deep review and live URL verification still happen when the user
+runs `/security-audit`.
+
 ## Workflow — `scan` / `full` (auditing skills & MCPs)
 
 1. **Run the engine** with `--json` (above). Read `summary`.

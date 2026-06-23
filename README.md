@@ -88,23 +88,34 @@ secrets before I push"* — or run a mode directly:
 /security-audit full     # force a complete re-scan, ignore the change cache
 ```
 
-### Optional: auto-nudge on change
+### Optional: automatic checking
 
-Add a `SessionStart` hook so each new session runs a near-instant hash check and
-nudges you only when a skill/MCP changed since your last audit (no model tokens):
+Decide **how often** the check runs and **how strict** it is, then let the
+installer wire it into `settings.json` (it merges, preserving your other settings):
 
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      { "hooks": [ {
-        "type": "command",
-        "command": "python3 ~/.claude/skills/security-audit/scripts/scan.py scan --changed-only --quiet"
-      } ] }
-    ]
-  }
-}
+```bash
+# once per session: a near-instant change-nudge (no model tokens)
+python3 security-audit/scripts/install_hooks.py --cadence session-start --enforcement warn
+
+# before EVERY skill/MCP call: warn on issues, never block
+python3 security-audit/scripts/install_hooks.py --cadence per-call --enforcement warn
+
+# before EVERY skill/MCP call: DENY a call that carries a Critical finding
+python3 security-audit/scripts/install_hooks.py --cadence per-call --enforcement block
+
+# turn automatic checking off
+python3 security-audit/scripts/install_hooks.py --uninstall
 ```
+
+| Cadence | Mechanism | Cost | Catches |
+|---------|-----------|------|---------|
+| `session-start` | `SessionStart` hook | once/session, ~0 | changes & due links since last audit |
+| `per-call` | `PreToolUse` hook on `Skill` + `mcp__.*` | ~100–300 ms/call | the specific skill/MCP **before** it runs |
+
+The hook runs only the deterministic engine (no model, no network); the deep
+review and live URL verification happen when you run `/security-audit`. The
+per-call guard targets just the item being invoked and **fails open** on any
+error, so it can never wedge your session.
 
 ## How it works
 
