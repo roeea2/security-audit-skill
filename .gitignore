@@ -1,0 +1,46 @@
+# --- security-audit: never publish machine-local state or any real config ---
+
+# Change-detection cache / resolved-URL fingerprints (per-machine, not portable)
+state.json
+.security-audit/
+**/.security-audit/
+
+# Secrets & credentials of any kind
+.env
+.env.*
+*.env
+*.credentials*
+*credentials.json
+.credentials.json
+*.pem
+*.key
+id_rsa*
+*.p12
+*.pfx
+
+# Real Claude/agent config (may contain API keys, tokens, PII, absolute paths)
+settings.json
+settings.*.json
+settings.local.json
+.claude.json
+.mcp.json
+.claude/
+
+# Working media / real photos & videos (EXIF/PII risk)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.heic
+*.mp4
+*.mov
+*.mp3
+*.wav
+
+# Python / OS noise
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+venv/
