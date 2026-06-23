@@ -431,7 +431,7 @@ def verdict(counts, mode):
 # Main
 # --------------------------------------------------------------------------- #
 
-def run(mode, project, resolve, update):
+def run(mode, project, resolve, update, ttl_hours=168):
     state = st.load_state()
     items, all_findings, url_entries, current_hashes, kinds = [], [], [], {}, {}
 
@@ -468,7 +468,6 @@ def run(mode, project, resolve, update):
             it["status"] = ("new" if it["key"] in diff["new"] else
                             "changed" if it["key"] in diff["changed"] else "unchanged")
             all_findings += it["_findings"]
-            url_entries += it["_urls"]
         # Carry forward unresolved findings on UNCHANGED items so a pre-existing
         # Critical/High doesn't get buried once the cache is populated. Content is
         # identical to last audit, so the cached findings still hold — surfacing
@@ -481,7 +480,20 @@ def run(mode, project, resolve, update):
                     all_findings += cf
                     carried += len(cf)
 
+        # URL re-verification is TIME-based, not file-change-based. A skill file
+        # can stay byte-identical while the domain behind one of its links is
+        # repointed (the redirect today differs from when we hashed it). So we
+        # consider URLs from EVERY item — changed or not — and re-verify any that
+        # are new or whose last check is older than the TTL. This is what closes
+        # the "same hash, different redirect destination" gap.
+        all_urls = {}
+        for it in items:
+            for u in it["_urls"]:
+                all_urls.setdefault(u["url"], u)
+        url_entries = [u for url, u in all_urls.items() if st.url_due(state, url, ttl_hours)]
+
     # URL TOCTOU comparison
+    urls_due = len(url_entries)
     url_findings, urls_to_verify = verify_urls(state, url_entries, resolve)
     all_findings += url_findings
 
@@ -499,6 +511,7 @@ def run(mode, project, resolve, update):
             "new": len(diff["new"]), "changed": len(diff["changed"]),
             "unchanged": len(diff["unchanged"]), "removed": len(diff["removed"]),
             "carried": locals().get("carried", 0),
+            "urls_due": locals().get("urls_due", 0),
             "findings_by_severity": counts,
             "verdict": verdict(counts, mode),
         },
@@ -561,6 +574,9 @@ def main():
                     help="print a one-line nudge only if something changed (for hooks)")
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--resolve-urls", action="store_true")
+    ap.add_argument("--url-ttl-hours", type=int, default=168,
+                    help="re-verify a link if it was last checked more than this "
+                         "many hours ago, regardless of file change (0 = always)")
     ap.add_argument("--no-update", action="store_true")
     args = ap.parse_args()
 
@@ -568,7 +584,8 @@ def main():
     # silently "acknowledge" a change before you've actually reviewed it. Only a
     # real audit run advances the cache.
     update = not args.no_update and not args.changed_only
-    result = run(args.mode, args.project, args.resolve_urls, update=update)
+    result = run(args.mode, args.project, args.resolve_urls, update=update,
+                 ttl_hours=args.url_ttl_hours)
     s = result["summary"]
 
     c = s["findings_by_severity"]
@@ -576,6 +593,7 @@ def main():
 
     if args.changed_only:
         n = s["new"] + s["changed"] + s["removed"]
+        due = s.get("urls_due", 0)
         if n:
             bits = []
             if s["new"]:
@@ -588,6 +606,9 @@ def main():
         elif unresolved:
             print(f"⚠ security-audit: no changes, but {unresolved} unresolved "
                   f"critical/high finding(s) remain — run /security-audit full")
+        elif due:
+            print(f"⚠ security-audit: {due} external link(s) due for re-verification "
+                  f"(redirect targets can change without the file changing) — run /security-audit")
         elif not args.quiet:
             print("✓ security-audit: nothing changed since last audit")
         return
@@ -596,8 +617,11 @@ def main():
         print(json.dumps(result, indent=2))
         return
 
-    # Human summary (the skill normally consumes --json; this is for direct use)
-    if args.mode != "deploy" and (s["new"] + s["changed"]) == 0 and not result["findings"]:
+    # Human summary (the skill normally consumes --json; this is for direct use).
+    # Only short-circuit when nothing changed, nothing is carried forward, AND no
+    # links are due for re-verification — otherwise there is still work to do.
+    if (args.mode != "deploy" and (s["new"] + s["changed"]) == 0
+            and not result["findings"] and not result["urls_to_verify"]):
         print(f"✓ No changes since last audit ({st.load_state().get('last_audit')}). "
               f"{s['unchanged']} items unchanged — nothing to review.")
         return

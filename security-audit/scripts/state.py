@@ -28,7 +28,7 @@ state.json shape:
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 STATE_VERSION = 1
@@ -122,6 +122,25 @@ def record_items(state, current, kinds, findings_by_key=None):
 # --------------------------------------------------------------------------- #
 # URL TOCTOU tracking
 # --------------------------------------------------------------------------- #
+
+def url_due(state, url, ttl_hours):
+    """A URL is 'due' for (re)verification if we've never resolved it, or it was
+    last checked longer ago than the TTL. This is what decouples link-destination
+    re-checks from file-content change: a skill file can stay byte-identical while
+    the domain behind one of its links is repointed, so links must be re-verified
+    on their own clock, not only when the referencing file changes. ttl_hours <= 0
+    means 'always due'."""
+    rec = state.get("urls", {}).get(url)
+    if not rec or not rec.get("last_checked"):
+        return True
+    if ttl_hours <= 0:
+        return True
+    try:
+        last = datetime.strptime(rec["last_checked"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return True
+    return (datetime.now(timezone.utc) - last) >= timedelta(hours=ttl_hours)
+
 
 def compare_url(state, url, final_url, content_sha):
     """Compare a freshly-resolved URL against the cached trusted record.

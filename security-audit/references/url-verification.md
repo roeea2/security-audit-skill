@@ -50,6 +50,30 @@ findings without a model in the loop. It degrades gracefully when the network is
 blocked (the URL is simply reported as needing manual verification). Use this for
 unattended / CI-style runs.
 
+## Re-verification is time-based, NOT file-change-based
+
+This is the subtle part, and it is deliberate. The skill's *change detection*
+(which makes audits cheap) keys on file **content hashes** — but a redirect can
+be repointed while the file that mentions the link stays byte-for-byte identical.
+If link checks were coupled to file changes, that exact attack would slip through
+the cheap short-circuit.
+
+So links are re-verified on **their own clock**. Every URL carries a
+`last_checked` timestamp in the cache, and on each audit the engine re-lists any
+URL that is **new** or whose last check is older than a TTL (default 7 days;
+`--url-ttl-hours N`, or `0` to always re-check) — **even for items whose content
+hash did not change**. A `scan` will not short-circuit while links are due. This
+is what closes the "same hash, different redirect destination" gap: the file
+`hacking.com` link looks unchanged, but because the link itself is due, the engine
+re-resolves it and catches that it now lands on `realhacking.com` instead of the
+`fakehacking.com` it resolved to when you trusted it.
+
+Trade-off: the very cheap `SessionStart` hook (`--changed-only`) only does the
+hash diff and the time check — it will *nudge* you that links are due, but it does
+not itself make network calls. The actual re-resolution happens when you run
+`/security-audit` (the engine with `--resolve-urls`), or you can wire a periodic
+`scan --resolve-urls` job for fully unattended link monitoring.
+
 ## Why the cache matters here
 
 The same `state.json` that makes audits token-cheap is what makes this defense

@@ -67,24 +67,33 @@ Run a mode explicitly with `/security-audit deploy`, etc. With no argument, use
 ## Workflow — `scan` / `full` (auditing skills & MCPs)
 
 1. **Run the engine** with `--json` (above). Read `summary`.
-2. **Short-circuit check.** In `scan` mode, if `summary.new + summary.changed == 0`,
-   report: `✓ No changes since last audit (<last_audit>). N items unchanged —
-   nothing to review.` and stop. (Suggest `/security-audit full` if they want a
-   forced deep pass.)
+2. **Short-circuit check.** In `scan` mode, stop early **only** when
+   `summary.new + summary.changed == 0` **and** there are no carried-forward
+   findings **and** `urls_to_verify` is empty (no links are due for
+   re-verification). Then report: `✓ No changes since last audit (<last_audit>).
+   N items unchanged — nothing to review.` If any of those is non-empty, there is
+   still work to do — continue. (Suggest `/security-audit full` for a forced deep
+   pass.)
 3. **Review changed items.** For each entry in `review_items`, look at its
    `findings`. The engine already classifies the obvious things (plaintext
    secrets in MCP env, unpinned `npx -y` packages, hidden-instruction phrasing,
    credential reads, obfuscation, shorteners/IP-literal hosts). Add your own
    judgement: read the actual `SKILL.md`/scripts of a flagged item if a finding
    is ambiguous, and decide whether it is a real risk or a false positive.
-4. **Verify external links live (the TOCTOU step).** For each URL in
-   `urls_to_verify`, use **WebFetch** to follow it and confirm the final
-   destination is what it claims and is not hostile. The engine records each
-   URL's resolved destination + a content fingerprint in the cache; if a URL it
-   had seen before now resolves somewhere new, it emits a **Critical
-   `URL_REDIRECT_CHANGED`** finding — treat that as a likely takeover and do not
-   follow the link. (For a deeper scripted check you may re-run the engine with
-   `--resolve-urls`, which follows redirects itself when the network allows.)
+4. **Verify external links live (the TOCTOU step).** This is **time-based, not
+   file-change-based** — a skill file can stay byte-identical while the domain
+   behind one of its links is repointed. The engine therefore lists every link
+   that is new or whose last check is older than the TTL (default 7 days;
+   `--url-ttl-hours`, `0` = always) in `urls_to_verify`, even for items whose
+   hash did not change. To actually re-verify, run the engine with
+   `--resolve-urls` (e.g. `scripts/scan.py scan --resolve-urls`): it follows each
+   redirect chain, compares the final destination + content fingerprint against
+   the cached trusted value, refreshes the cache, and emits a **Critical
+   `URL_REDIRECT_CHANGED`** if a previously-trusted link now lands somewhere new
+   (or **High `URL_CONTENT_CHANGED`** if the page changed). Then use **WebFetch**
+   on anything flagged (or anything you want a content-level judgement on) to
+   confirm whether the new destination is actually hostile. Treat a redirect
+   change on a link the agent was about to act on as stop-and-confirm.
 5. **Render the findings table** (template below).
 6. **Let the engine update its cache.** A normal (non-`--no-update`) run records
    the new hashes so the next audit is cheap. Re-run without `--json` if you only
