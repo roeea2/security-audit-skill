@@ -81,17 +81,23 @@ enable automatic auditing, or say something like "audit my skills automatically"
    - *block* — denies a skill/MCP call that carries a Critical finding until it's
      resolved. (It targets the specific item being called and fails open on any
      error, so it won't wedge the session.)
-3. **Live link checking** — "Should the session-start hook follow external links
-   over the network to auto-detect a hijacked/repointed destination?"
+3. **Live link checking** — "Should links be auto-resolved in the background to
+   detect a hijacked/repointed destination?"
    - *off* (default) — hooks stay network-free; links are only flagged as "due"
      and actually verified when you run `/security-audit`.
-   - *resolve* — the session-start hook deterministically follows each due link's
-     redirects and alerts you if a previously-trusted destination changed. No
-     model/tokens, but it makes network calls at session start (amortized by the
-     7-day TTL after your first full audit). The **model-level WebFetch
-     judgement** — deciding whether a *new* or first-seen destination is actually
-     hostile, vs. just changed — only happens when you run `/security-audit`,
-     because a shell hook can't invoke the model.
+   - *resolve* — adds a **detached, hard-bounded background** resolver after the
+     instant offline nudge. It never blocks startup (the foreground returns in
+     well under a second; the resolver is capped by `--resolve-budget` /
+     `--resolve-timeout` / `--max-urls` and uses `--urls-only` so it can't mask
+     file changes). When it spots a changed destination it records an **alert**
+     that the *next* session-start nudge surfaces — no model/tokens. The
+     **model-level WebFetch judgement** — whether a new/changed destination is
+     actually hostile — still happens only when you run `/security-audit`.
+
+   ⚠️ Never put `--resolve-urls` directly in a foreground `SessionStart` command —
+   a `SessionStart` hook blocks Claude Code startup, and synchronous network calls
+   there can stall the session past its init timeout. The installer handles this
+   correctly (detached + bounded + watchdog); don't hand-edit it back to blocking.
 
 Then apply the choice with the installer (it merges into `settings.json`,
 preserving everything else):

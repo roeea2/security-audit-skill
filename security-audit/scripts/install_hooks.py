@@ -63,12 +63,20 @@ def _strip_ours(hook_list):
 
 
 def session_start_entry(resolve_links=False):
-    cmd = f'python3 "{SCRIPTS}/scan.py" scan --changed-only --quiet'
-    if resolve_links:
-        # Deterministically follow each due link's redirects at session start so a
-        # repointed/hijacked destination is caught automatically (no model, but it
-        # makes network calls). The nudge stays quiet unless something changed.
-        cmd += " --resolve-urls"
+    # The foreground part is ALWAYS the instant, offline nudge — it must never make
+    # a network call, because a SessionStart hook blocks Claude Code startup (a slow
+    # hook can stall the session past its init timeout).
+    nudge = f'python3 "{SCRIPTS}/scan.py" scan --changed-only --quiet'
+    if not resolve_links:
+        return {"hooks": [{"type": "command", "command": nudge}]}
+    # Opt-in link monitoring: run the resolver DETACHED in the background and
+    # HARD-BOUNDED (≤8s, ≤15 URLs). It writes link-change alerts that the next
+    # offline nudge surfaces, and uses --urls-only so it never masks file changes.
+    # Detached + bounded means it cannot block startup even if backgrounding is
+    # imperfect on some shell.
+    bg = (f'python3 "{SCRIPTS}/scan.py" scan --urls-only --resolve-urls --quiet '
+          f'--resolve-budget 8 --max-urls 15')
+    cmd = f'{nudge} ; ( {bg} >/dev/null 2>&1 & )'
     return {"hooks": [{"type": "command", "command": cmd}]}
 
 

@@ -74,6 +74,25 @@ not itself make network calls. The actual re-resolution happens when you run
 `/security-audit` (the engine with `--resolve-urls`), or you can wire a periodic
 `scan --resolve-urls` job for fully unattended link monitoring.
 
+### Startup safety — a hook must never block the session
+
+A Claude Code `SessionStart` hook runs *during startup*, and a slow hook can stall
+the session past its init timeout. So network work is never in the blocking path:
+
+- The session-start command is **offline-only** in the foreground (hash diff +
+  time check + surfacing any persisted alerts) — it returns in well under a second
+  with no network.
+- The opt-in link resolver (`--link-check resolve`) runs **detached in the
+  background** and **hard-bounded** (`--resolve-budget`, `--resolve-timeout`,
+  `--max-urls`). It writes link-change *alerts* (`--urls-only`, so it never masks
+  file changes); the *next* offline nudge surfaces them with zero network.
+- A **watchdog** (`signal.alarm`) makes the process self-terminate (default 20s in
+  hook mode) regardless of cause — disk, DNS, an unforeseen hang — so it can never
+  hold up startup.
+
+Net effect: link resolution is bounded and detached; the thing that runs at
+startup is always instant and offline.
+
 ## Why the cache matters here
 
 The same `state.json` that makes audits token-cheap is what makes this defense

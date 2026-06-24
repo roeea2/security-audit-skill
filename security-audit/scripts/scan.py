@@ -364,20 +364,40 @@ def resolve_url(url, timeout=8, max_hops=8):
         return None, None, chain, str(e)
 
 
-def verify_urls(state, url_entries, resolve):
+def verify_urls(state, url_entries, resolve, timeout=5, budget_s=12, max_urls=25):
     """Compare each URL against the cached trusted record. Returns findings +
-    the list of urls the model should verify live with WebFetch."""
+    the list of urls still needing verification.
+
+    Resolution is HARD-BOUNDED so it can never hang a caller (a blocking hook in
+    particular): at most `max_urls` are resolved, each with a `timeout`-second
+    cap, and the whole resolve phase stops after `budget_s` wall-clock seconds.
+    Anything not resolved within the budget is returned as 'deferred' for a later
+    manual /security-audit, never silently dropped."""
+    import time
     findings, to_verify, seen = [], [], set()
+    start = time.monotonic()
+    resolved = 0
     for entry in url_entries:
         url = entry["url"]
         if url in seen:
             continue
         seen.add(url)
         rec = state.get("urls", {}).get(url)
-        if resolve:
-            final_url, content_sha, chain, err = resolve_url(url)
+        over_budget = resolve and (resolved >= max_urls
+                                   or (time.monotonic() - start) > budget_s)
+        if resolve and not over_budget:
+            resolved += 1
+            final_url, content_sha, chain, err = resolve_url(url, timeout=timeout)
             if err is None:
                 status, detail = st.compare_url(state, url, final_url, content_sha)
+                if status in ("redirect_changed", "content_changed"):
+                    st.add_alert(state, {
+                        "id": "URL_REDIRECT_CHANGED" if status == "redirect_changed" else "URL_CONTENT_CHANGED",
+                        "severity": "critical" if status == "redirect_changed" else "high",
+                        "title": "Link destination changed" if status == "redirect_changed" else "Linked page content changed",
+                        "location": entry["where"],
+                        "evidence": f"{detail.get('was')} → {final_url}" if status == "redirect_changed" else f"final={final_url}",
+                    })
                 if status == "redirect_changed":
                     findings.append({
                         "id": "URL_REDIRECT_CHANGED", "severity": "critical", "category": "url",
@@ -401,7 +421,8 @@ def verify_urls(state, url_entries, resolve):
                 to_verify.append({**entry, "status": "unresolved", "error": err,
                                   "cached_final": (rec or {}).get("final_url")})
         else:
-            to_verify.append({**entry, "status": "known" if rec else "new",
+            status = "deferred" if (resolve and over_budget) else ("known" if rec else "new")
+            to_verify.append({**entry, "status": status,
                               "cached_final": (rec or {}).get("final_url")})
     return findings, to_verify
 
@@ -431,7 +452,8 @@ def verdict(counts, mode):
 # Main
 # --------------------------------------------------------------------------- #
 
-def run(mode, project, resolve, update, ttl_hours=168):
+def run(mode, project, resolve, update, ttl_hours=168,
+        resolve_timeout=5, resolve_budget=12, max_urls=25, urls_only=False):
     state = st.load_state()
     items, all_findings, url_entries, current_hashes, kinds = [], [], [], {}, {}
 
@@ -492,9 +514,11 @@ def run(mode, project, resolve, update, ttl_hours=168):
                 all_urls.setdefault(u["url"], u)
         url_entries = [u for url, u in all_urls.items() if st.url_due(state, url, ttl_hours)]
 
-    # URL TOCTOU comparison
+    # URL TOCTOU comparison (resolution is hard-bounded — see verify_urls)
     urls_due = len(url_entries)
-    url_findings, urls_to_verify = verify_urls(state, url_entries, resolve)
+    url_findings, urls_to_verify = verify_urls(
+        state, url_entries, resolve,
+        timeout=resolve_timeout, budget_s=resolve_budget, max_urls=max_urls)
     all_findings += url_findings
 
     # URL findings belong to the items whose URLs they came from; for caching we
@@ -521,9 +545,15 @@ def run(mode, project, resolve, update, ttl_hours=168):
                          for it in items if it.get("status")],
         "urls_to_verify": urls_to_verify,
         "findings": _sorted(all_findings),
+        "alerts": state.get("alerts", []),
     }
 
-    if update and mode != "deploy":
+    if urls_only:
+        # Background/scheduled link resolver: persist refreshed URL fingerprints
+        # and any new alerts, but DO NOT touch item hashes — otherwise it would
+        # silently acknowledge file changes the offline nudge should report.
+        st.save_state(state)
+    elif update and mode != "deploy":
         # Persist per-item findings so unchanged items can carry their unresolved
         # issues forward to the next audit (fresh for reviewed items, cached
         # otherwise).
@@ -606,6 +636,23 @@ def _sorted(findings):
     return sorted(findings, key=lambda f: (rank.get(f.get("severity"), 9), f.get("id", "")))
 
 
+def _watchdog(seconds):
+    """Last-resort guarantee that this process can never stall a Claude Code
+    SessionStart hook (which blocks startup). After `seconds`, the process exits
+    cleanly with code 0 no matter what it was doing — disk, DNS, an unforeseen
+    hang. Network already has its own budget; this covers everything else."""
+    import signal
+
+    def _handler(signum, frame):
+        sys.stderr.write("security-audit: watchdog timeout — exiting so startup is never blocked\n")
+        os._exit(0)
+    try:
+        signal.signal(signal.SIGALRM, _handler)
+        signal.alarm(int(seconds))
+    except Exception:
+        pass  # non-Unix / no SIGALRM — degrade silently
+
+
 def main():
     ap = argparse.ArgumentParser(description="security-audit scanner")
     ap.add_argument("mode", nargs="?", default="scan",
@@ -619,15 +666,42 @@ def main():
     ap.add_argument("--url-ttl-hours", type=int, default=168,
                     help="re-verify a link if it was last checked more than this "
                          "many hours ago, regardless of file change (0 = always)")
+    ap.add_argument("--resolve-timeout", type=int, default=5,
+                    help="per-URL network timeout in seconds")
+    ap.add_argument("--resolve-budget", type=int, default=12,
+                    help="hard wall-clock cap (seconds) for the whole resolve phase")
+    ap.add_argument("--max-urls", type=int, default=25,
+                    help="max URLs resolved per run")
+    ap.add_argument("--urls-only", action="store_true",
+                    help="background link resolver: refresh URL cache + alerts "
+                         "without touching item hashes (won't mask file changes)")
+    ap.add_argument("--clear-alerts", action="store_true",
+                    help="clear persisted link-change alerts (after reviewing them)")
     ap.add_argument("--no-update", action="store_true")
+    ap.add_argument("--watchdog", type=int, default=0,
+                    help="self-terminate after N seconds (0 = auto: 20s in hook mode)")
     args = ap.parse_args()
+
+    # Arm the watchdog. In the startup-blocking hook path (--changed-only) keep it
+    # tight; otherwise a generous ceiling. Network has its own budget already.
+    wd = args.watchdog or (20 if args.changed_only else 120)
+    _watchdog(wd)
+
+    if args.clear_alerts:
+        state = st.load_state()
+        st.clear_alerts(state)
+        st.save_state(state)
+        print("security-audit: cleared link-change alerts")
+        return
 
     # The hook nudge must never update the baseline — otherwise it would
     # silently "acknowledge" a change before you've actually reviewed it. Only a
     # real audit run advances the cache.
-    update = not args.no_update and not args.changed_only
+    update = (args.urls_only) or (not args.no_update and not args.changed_only)
     result = run(args.mode, args.project, args.resolve_urls, update=update,
-                 ttl_hours=args.url_ttl_hours)
+                 ttl_hours=args.url_ttl_hours, resolve_timeout=args.resolve_timeout,
+                 resolve_budget=args.resolve_budget, max_urls=args.max_urls,
+                 urls_only=args.urls_only)
     s = result["summary"]
 
     c = s["findings_by_severity"]
@@ -636,12 +710,16 @@ def main():
     if args.changed_only:
         n = s["new"] + s["changed"] + s["removed"]
         due = s.get("urls_due", 0)
+        # Live link changes (if this run resolved) OR persisted alerts from a prior
+        # background/scheduled resolve. The offline nudge surfaces alerts with zero
+        # network so a detected takeover is never lost.
         link_changed = [f for f in result["findings"]
                         if f.get("id") in ("URL_REDIRECT_CHANGED", "URL_CONTENT_CHANGED")]
-        if link_changed:
+        n_links = len(link_changed) or len(result.get("alerts", []))
+        if n_links:
             # The scariest case: a link you trusted now resolves/serves something
             # different. Lead with it regardless of file changes.
-            print(f"⛔ security-audit: {len(link_changed)} previously-trusted link(s) "
+            print(f"⛔ security-audit: {n_links} previously-trusted link(s) "
                   f"changed destination/content since last audit — possible takeover. "
                   f"Run /security-audit now (do not follow the link).")
         elif n:

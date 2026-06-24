@@ -128,6 +128,14 @@ actually hostile (a docs link that now serves a login/exploit page), and live
 per-call guard targets just the item being invoked and **fails open** on any
 error, so it can never wedge your session.
 
+**Startup is never blocked.** A `SessionStart` hook runs during Claude Code
+startup, so network work is kept out of the blocking path: the session-start
+command is offline-only and instant; `--link-check resolve` runs the resolver
+**detached in the background**, hard-bounded by `--resolve-budget` /
+`--resolve-timeout` / `--max-urls`; and a **watchdog** self-terminates the process
+(~20s in hook mode) regardless of cause. Worst case the hook adds nothing to
+startup — it can't hang it.
+
 ## How it works
 
 ```

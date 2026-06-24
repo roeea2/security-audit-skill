@@ -53,10 +53,33 @@ def load_state():
             data = json.loads(p.read_text())
             data.setdefault("items", {})
             data.setdefault("urls", {})
+            data.setdefault("alerts", [])
             return data
         except (json.JSONDecodeError, OSError):
             pass
-    return {"version": STATE_VERSION, "last_audit": None, "items": {}, "urls": {}}
+    return {"version": STATE_VERSION, "last_audit": None,
+            "items": {}, "urls": {}, "alerts": []}
+
+
+def add_alert(state, finding):
+    """Persist a link-change finding so a background/scheduled resolve can surface
+    it later through the offline session-start nudge (which makes no network
+    calls). Alerts stick around until a real /security-audit clears them, so a
+    detected takeover can't be silently 'acknowledged'."""
+    alerts = state.setdefault("alerts", [])
+    key = (finding.get("id"), finding.get("location"), finding.get("evidence"))
+    for a in alerts:
+        if (a.get("id"), a.get("location"), a.get("evidence")) == key:
+            return
+    alerts.append({
+        "id": finding.get("id"), "severity": finding.get("severity"),
+        "title": finding.get("title"), "location": finding.get("location"),
+        "evidence": finding.get("evidence"), "at": now_iso(),
+    })
+
+
+def clear_alerts(state):
+    state["alerts"] = []
 
 
 def save_state(state):
