@@ -2,19 +2,18 @@
 name: security-audit
 description: >-
   Security auditor for Claude skills, MCP servers, and pre-publish deployments.
-  Use this skill PROACTIVELY — not only when asked. Trigger it whenever: a skill
-  or MCP server is about to run, is newly installed, or has changed; it's the
-  first time a given skill/MCP is used this session; an MCP config, settings.json,
-  or .mcp.json is edited; OR the user is about to push / publish / deploy / "go
-  live" / open-source / upload anything to GitHub, npm, a website, or any
-  external/production surface. It vets skills & MCPs for hidden-instruction,
+  Use PROACTIVELY, not only when asked. Trigger whenever: a skill or MCP is about
+  to run, is newly installed, or changed; the first time a skill/MCP is used this
+  session; an MCP config, settings.json, or .mcp.json is edited; OR before
+  pushing, publishing, deploying, or uploading anything to GitHub, npm, a website,
+  or any production surface. It vets skills & MCPs for hidden-instruction,
   exfiltration, and supply-chain risk (including following external links and
-  re-checking that a previously-trusted redirect hasn't been repointed to
-  something hostile), and runs an exposure gate that blocks secrets, API keys,
-  tokens, PII, and EXIF from being published. It is token-cheap: a deterministic
-  hash-diff runs first and stops immediately when nothing changed. Triggers on:
-  "is this skill safe", "audit my MCPs", "check before I push", "security review
-  of my skills", "did anything change", "scan for secrets before publishing".
+  re-checking that a trusted redirect wasn't repointed to something hostile), and
+  runs an exposure gate that blocks secrets, API keys, tokens, PII, and EXIF from
+  being published. Token-cheap: a deterministic hash-diff runs first and stops
+  when nothing changed. Triggers on: "is this skill safe", "audit my MCPs", "check
+  before I push", "security review of my skills", "scan for secrets before
+  publishing".
 argument-hint: "[scan | deploy | full]  (default: scan)"
 metadata:
   version: "1.0.0"
