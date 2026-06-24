@@ -39,6 +39,15 @@ def main():
     ap.add_argument("--mode", choices=["warn", "block"], default="warn")
     args = ap.parse_args()
 
+    # Self-terminate if the guard ever hangs, so it can never block a tool call.
+    # On timeout we exit 0 (allow) — failing open, like every other guard error.
+    try:
+        import signal
+        signal.signal(signal.SIGALRM, lambda *a: os._exit(0))
+        signal.alarm(10)
+    except Exception:
+        pass
+
     try:
         payload = json.load(sys.stdin)
     except Exception:
@@ -59,34 +68,40 @@ def main():
 
     c = res["counts"]
     crit, high = c.get("critical", 0), c.get("high", 0)
-    changed = res["status"] in ("new", "changed")
+    status = res["status"]
+    unaudited = status in ("new", "changed")  # not reviewed since this version
     label = res["key"]
 
-    if args.mode == "block" and crit:
-        reason = (f"security-audit blocked {label}: {crit} Critical finding(s) "
-                  f"({res['status']}). Run /security-audit for the details and fix "
-                  f"before invoking it.")
+    # Audit-gate framing: a skill/MCP shouldn't be trusted to run until a full
+    # /security-audit has reviewed *this* version of it.
+    gate = ("has not been audited yet" if status == "new"
+            else "changed since your last audit" if status == "changed" else None)
+    finding_note = ""
+    if crit or high:
+        parts = ([f"{crit} critical"] if crit else []) + ([f"{high} high"] if high else [])
+        finding_note = f" ({', '.join(parts)} deterministic finding(s))"
+
+    # block: deny anything unaudited (new/changed) or carrying a Critical, until
+    # a full audit clears it. warn: never deny.
+    if args.mode == "block" and (crit or unaudited):
+        why = gate or f"has {crit} Critical finding(s)"
         _emit({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
+            "permissionDecisionReason": (
+                f"security-audit blocked {label}: {why}{finding_note}. "
+                f"Run /security-audit to review and clear it before invoking."),
         }})
         return
 
-    # Otherwise allow, but surface context to the model when noteworthy.
-    if crit or high or changed:
-        bits = []
-        if changed:
-            bits.append(res["status"])
-        if crit:
-            bits.append(f"{crit} critical")
-        if high:
-            bits.append(f"{high} high")
-        note = (f"⚠ security-audit: {label} is {', '.join(bits)} since last audit. "
-                f"Consider running /security-audit before relying on it.")
+    # warn / allow: surface context to the model when noteworthy.
+    if gate or crit or high:
+        lead = gate or "has unresolved findings"
         _emit({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "additionalContext": note,
+            "additionalContext": (
+                f"⚠ security-audit: {label} {lead}{finding_note}. "
+                f"Run /security-audit before relying on it."),
         }})
 
 

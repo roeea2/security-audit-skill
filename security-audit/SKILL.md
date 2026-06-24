@@ -76,11 +76,16 @@ enable automatic auditing, or say something like "audit my skills automatically"
      overhead.
    - *per-call* — runs the guard before every skill/MCP invocation (a `PreToolUse`
      hook). Truly "check whenever a skill/MCP runs," at ~100–300 ms per call.
-2. **Enforcement** (only if per-call) — "Warn, or block on Critical?"
-   - *warn* — surfaces a notice to me but never blocks the call.
-   - *block* — denies a skill/MCP call that carries a Critical finding until it's
-     resolved. (It targets the specific item being called and fails open on any
-     error, so it won't wedge the session.)
+2. **Enforcement** (only if per-call) — "Warn, or block?"
+   - *warn* — surfaces a notice to me (e.g. "this skill hasn't been audited yet /
+     changed since your last audit / has Critical findings — run /security-audit")
+     but never blocks the call.
+   - *block* — an **audit gate**: denies a skill/MCP call that is *unaudited* (new
+     or changed since your last full audit) **or** carries a Critical finding,
+     until a `/security-audit` reviews and records it. This is how you get
+     "audited before it runs" without putting the deep audit in the blocking path.
+     It targets the specific item, is offline, has a 10 s self-watchdog, and fails
+     open on any error, so it won't wedge the session.
 3. **Live link checking** — "Should links be auto-resolved in the background to
    detect a hijacked/repointed destination?"
    - *off* (default) — hooks stay network-free; links are only flagged as "due"
